@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compensation Evaluation Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f7f9;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            background: #fff;
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+            padding: 15px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #495057;
+        }
+        input {
+            padding: 8px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        input:focus {
+            outline: none;
+            border-color: #80bdff;
+            box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+        }
+        .chart-container {
+            position: relative;
+            height: 500px;
+            width: 100%;
+        }
+        .summary {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e3f2fd;
+            border-left: 4px solid #1976d2;
+            border-radius: 4px;
+            font-size: 0.95rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Compensation Projection (60 Months)</h1>
+    
+    <div class="controls">
+        <div class="control-group">
+            <label for="baselineUSD">Current Baseline (USD)</label>
+            <input type="number" id="baselineUSD" value="175000" step="1000">
+        </div>
+        <div class="control-group">
+            <label for="exchangeRate">Exchange Rate (CZK/USD)</label>
+            <input type="number" id="exchangeRate" value="20.5" step="0.1">
+        </div>
+        <div class="control-group">
+            <label for="oteCZK">New Role OTE Year 1 (CZK)</label>
+            <input type="number" id="oteCZK" value="3200000" step="100000">
+        </div>
+        <div class="control-group">
+            <label for="growthRate">Annual Organic Growth (%)</label>
+            <input type="number" id="growthRate" value="10" step="1">
+        </div>
+        <div class="control-group">
+            <label for="overachievement">Variable Achievement (%)</label>
+            <input type="number" id="overachievement" value="110" step="1">
+        </div>
+    </div>
+
+    <div class="summary" id="summaryText">
+        Loading summary...
+    </div>
+
+    <div class="chart-container">
+        <canvas id="salaryChart"></canvas>
+    </div>
+</div>
+
+<script>
+    // Tax Constants 2026
+    const SOCIAL_INSURANCE = 0.071;
+    const HEALTH_INSURANCE = 0.045;
+    const TAX_RATE_1 = 0.15;
+    const TAX_RATE_2 = 0.23;
+    const MONTHLY_THRESHOLD = 146901;
+    const MONTHLY_DISCOUNT = 2570;
+    const SIGNING_BONUS = 550000;
+
+    let chartInstance = null;
+
+    function calculateNetMonthly(grossMonthly) {
+        const social = grossMonthly * SOCIAL_INSURANCE;
+        const health = grossMonthly * HEALTH_INSURANCE;
+        
+        const base15 = Math.min(grossMonthly, MONTHLY_THRESHOLD);
+        const base23 = Math.max(0, grossMonthly - MONTHLY_THRESHOLD);
+        
+        let tax = (base15 * TAX_RATE_1) + (base23 * TAX_RATE_2);
+        tax = Math.max(0, tax - MONTHLY_DISCOUNT);
+        
+        return grossMonthly - social - health - tax;
+    }
+
+    function generateData() {
+        // Get Inputs
+        const baselineUSD = parseFloat(document.getElementById('baselineUSD').value) || 0;
+        const exchangeRate = parseFloat(document.getElementById('exchangeRate').value) || 0;
+        let oteCZK = parseFloat(document.getElementById('oteCZK').value) || 0;
+        const growthRate = (parseFloat(document.getElementById('growthRate').value) || 0) / 100;
+        const overachievement = (parseFloat(document.getElementById('overachievement').value) || 0) / 100;
+
+        // Current Role Data
+        const currentGrossAnnual = baselineUSD * exchangeRate;
+        const currentGrossMonthly = currentGrossAnnual / 12;
+        const currentNetMonthly = calculateNetMonthly(currentGrossMonthly);
+
+        const labels = [];
+        const currentData = [];
+        const newData = [];
+        
+        let totalCurrentNet = 0;
+        let totalNewNet = 0;
+        let breakEvenMonth = -1;
+
+        // Simulate 60 months (5 years)
+        for (let year = 1; year <= 5; year++) {
+            
+            // Calculate New Role Gross for the year
+            let currentYearOTE = oteCZK * Math.pow(1 + growthRate, year - 1);
+            let baseAnnual = currentYearOTE * 0.70;
+            let targetVarAnnual = currentYearOTE * 0.30;
+            let actualVarAnnual = targetVarAnnual * overachievement;
+            
+            let newGrossAnnual = baseAnnual + actualVarAnnual;
+            if (year === 1) {
+                newGrossAnnual += SIGNING_BONUS;
+            }
+            
+            let newGrossMonthly = newGrossAnnual / 12;
+            let newNetMonthly = calculateNetMonthly(newGrossMonthly);
+
+            for (let month = 1; month <= 12; month++) {
+                let absoluteMonth = ((year - 1) * 12) + month;
+                labels.push(`Month ${absoluteMonth}`);
+                
+                currentData.push(currentNetMonthly);
+                newData.push(newNetMonthly);
+
+                totalCurrentNet += currentNetMonthly;
+                totalNewNet += newNetMonthly;
+
+                // Check Cumulative Break-even
+                if (breakEvenMonth === -1 && totalNewNet >= totalCurrentNet) {
+                    breakEvenMonth = absoluteMonth;
+                }
+            }
+        }
+
+        updateSummary(currentGrossAnnual, currentNetMonthly, totalCurrentNet, totalNewNet, breakEvenMonth);
+
+        return { labels, currentData, newData };
+    }
+
+    function updateSummary(grossAnnual, netMonthly, totalCurrent, totalNew, breakEvenMonth) {
+        const diff = totalNew - totalCurrent;
+        const formatCZK = (num) => new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'CZK', maximumFractionDigits: 0 }).format(num);
+        
+        let text = `<strong>Baseline Metrics:</strong> ${formatCZK(grossAnnual)} Gross/Year &rarr; ${formatCZK(netMonthly)} Net/Month.<br>`;
+        text += `<strong>5-Year Cumulative Delta:</strong> ${formatCZK(diff)} `;
+        text += diff >= 0 ? '<span style="color: green;">(Advantage: New Role)</span>.<br>' : '<span style="color: red;">(Advantage: Current Role)</span>.<br>';
+        
+        if (breakEvenMonth !== -1) {
+            text += `<strong>Break-even Point:</strong> Cumulative net income surpasses the baseline at <strong>Month ${breakEvenMonth}</strong>.`;
+        } else {
+            text += `<strong>Break-even Point:</strong> The new role does not surpass the baseline net income within the 60-month window under these parameters.`;
+        }
+        
+        document.getElementById('summaryText').innerHTML = text;
+    }
+
+    function updateChart() {
+        const data = generateData();
+
+        if (chartInstance) {
+            chartInstance.data.labels = data.labels;
+            chartInstance.data.datasets[0].data = data.currentData;
+            chartInstance.data.datasets[1].data = data.newData;
+            chartInstance.update();
+        } else {
+            const ctx = document.getElementById('salaryChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.labels,
+                    datasets: [
+                        {
+                            label: 'Current Role (Net / Month)',
+                            data: data.currentData,
+                            borderColor: '#e74c3c',
+                            backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            fill: true,
+                            tension: 0.1,
+                            pointRadius: 0,
+                            pointHitRadius: 10
+                        },
+                        {
+                            label: 'New Role (Net / Month)',
+                            data: data.newData,
+                            borderColor: '#2ecc71',
+                            backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.1,
+                            stepped: 'before',
+                            pointRadius: 0,
+                            pointHitRadius: 10
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'Net Income (CZK)'
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return new Intl.NumberFormat('cs-CZ').format(value);
+                                }
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Timeline (Months)'
+                            },
+                            ticks: {
+                                maxTicksLimit: 12
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'CZK', maximumFractionDigits: 0 }).format(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    // Event Listeners
+    document.querySelectorAll('input').forEach(input => {
+        input.addEventListener('input', updateChart);
+    });
+
+    // Initialize
+    updateChart();
+</script>
+
+</body>
+</html>
